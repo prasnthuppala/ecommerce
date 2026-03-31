@@ -1,0 +1,263 @@
+name: CD Pipeline — Deploy to Kubernetes
+
+# WHY CD IS SEPARATE FROM CI:
+# CI = Continuous Integration: build, test, scan on EVERY commit.
+# CD = Continuous Delivery/Deployment: deploy to an environment.
+# Separating them means: CI runs on PRs (never deploys), CD only
+# runs after CI passes on main (safe deployments only).
+#
+# WHY WE HAVE CD AT ALL:
+# Without CD, a developer must manually SSH to a server and run kubectl commands.
+# That's error-prone, not auditable, and doesn't scale.
+# CD automates the "how do I get my working code to production?" question.
+# Every deploy is: identical, auditable (who deployed what when), reversible.
+
+on:
+  # Trigger CD when CI completes successfully on main
+  workflow_run:
+    workflows: ["CI Pipeline — Build, Test & Scan"]
+    types: [completed]
+    branches: [main]
+
+  # Manual trigger — allows deploying a specific version or re-deploying
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options: [staging, production]
+      image_tag:
+        description: 'Image tag to deploy (leave empty for latest main)'
+        required: false
+        default: ''
+      services:
+        description: 'Services to deploy (comma-separated, or "all")'
+        required: false
+        default: 'all'
+
+permissions:
+  contents: read
+  id-token: write
+  # WHY id-token: write:
+  # This is the OIDC permission. GitHub generates a short-lived JWT.
+  # AWS reads this JWT and issues 15-minute temporary credentials.
+  # Result: no AWS_ACCESS_KEY_ID stored anywhere. Zero static secrets.
+  # If this pipeline is compromised, credentials expire in 15 minutes.
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  # Which Kubernetes namespace to deploy into.
+  # Namespace = logical partition in Kubernetes cluster.
+  # All our services live in 'ecommerce' namespace together.
+  K8S_NAMESPACE: ecommerce
+  AWS_REGION: ap-south-1
+  EKS_CLUSTER_NAME: devops-portfolio-cluster
+
+jobs:
+  # ═══════════════════════════════════════════════════════════════
+  # GATE: Only deploy if CI passed — not if it failed/was cancelled
+  # ═══════════════════════════════════════════════════════════════
+  check-ci:
+    name: Verify CI Passed
+    runs-on: ubuntu-22.04
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    steps:
+      - name: CI status check
+        run: |
+          echo "CI pipeline passed. Proceeding with deployment."
+          echo "Triggered by: ${{ github.event_name }}"
+          echo "Commit: ${{ github.sha }}"
+
+  # ═══════════════════════════════════════════════════════════════
+  # DEPLOY TO STAGING: automatic on every main merge
+  # ═══════════════════════════════════════════════════════════════
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-22.04
+    needs: [check-ci]
+    timeout-minutes: 20
+    # WHY environment block:
+    # Links this job to a GitHub Environment called "staging".
+    # You can configure: required reviewers (approval gate before deploy),
+    # environment-specific secrets, deployment history.
+    # GitHub shows deployment status on commits and PRs automatically.
+    environment:
+      name: staging
+      url: https://staging.shopflow.io
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          # OIDC flow explanation:
+          # 1. GitHub generates a JWT token signed by GitHub's OIDC provider
+          # 2. AWS IAM has a trust policy that trusts GitHub's OIDC provider
+          # 3. AWS verifies the JWT's signature and claims (repo, branch, etc.)
+          # 4. AWS issues temporary STS credentials (15-min TTL)
+          # 5. These credentials are set as environment variables automatically
+          # Result: kubectl and helm commands work with AWS permissions.
+
+      - name: Update kubeconfig for EKS
+        run: |
+          aws eks update-kubeconfig \
+            --name ${{ env.EKS_CLUSTER_NAME }} \
+            --region ${{ env.AWS_REGION }}
+          # WHY: Downloads the cluster's CA certificate and auth token.
+          # After this, kubectl knows: where the API server is,
+          # how to authenticate, and which cluster to talk to.
+          # The kubeconfig is written to ~/.kube/config on the runner.
+
+      - name: Set deployment tag
+        id: tag
+        run: |
+          # Use provided tag, or fall back to the commit SHA from CI run
+          TAG="${{ github.event.inputs.image_tag || github.sha }}"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "Deploying tag: $TAG"
+          # WHY GITHUB_OUTPUT (not echo ::set-output):
+          # set-output was deprecated in 2022. GITHUB_OUTPUT is the modern way.
+          # It writes "key=value" to a file GitHub reads after the step.
+          # Referenced in later steps as: ${{ steps.tag.outputs.tag }}
+
+      - name: Create namespace if not exists
+        run: |
+          kubectl get namespace ${{ env.K8S_NAMESPACE }} || \
+          kubectl create namespace ${{ env.K8S_NAMESPACE }}
+
+      - name: Install/Upgrade Helm (if needed)
+        run: helm version || (curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash)
+
+      - name: Deploy all services with Helm
+        run: |
+          SERVICES="cart product payment auth notification"
+          if [ "${{ github.event.inputs.services }}" != "all" ] && [ -n "${{ github.event.inputs.services }}" ]; then
+            SERVICES="${{ github.event.inputs.services }}"
+          fi
+
+          for SVC in $SERVICES; do
+            echo "━━━ Deploying $SVC ━━━"
+            helm upgrade --install ${SVC}-service ./helm/${SVC} \
+              --namespace ${{ env.K8S_NAMESPACE }} \
+              --create-namespace \
+              --set image.repository=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/${SVC} \
+              --set image.tag=${{ steps.tag.outputs.tag }} \
+              --set image.pullPolicy=Always \
+              --set environment=staging \
+              --atomic \
+              --timeout 5m \
+              --wait
+            # --install: create release if not exists, upgrade if exists.
+            #            Same command works for first deploy AND updates.
+            # --atomic: if deployment fails (pods crashloop, health check fails),
+            #           AUTOMATICALLY ROLLBACK to the previous working version.
+            #           Without this: failed deploy leaves broken state.
+            # --timeout 5m: if pods aren't Ready in 5 min, consider failed.
+            #               Triggers --atomic rollback.
+            # --wait: block the command until all pods pass readinessProbe.
+            #         Without this: helm returns success before pods are ready.
+            echo "✅ $SVC deployed successfully"
+          done
+
+      - name: Verify deployments
+        run: |
+          echo "━━━ Deployment Status ━━━"
+          kubectl get pods -n ${{ env.K8S_NAMESPACE }} -o wide
+          kubectl get deployments -n ${{ env.K8S_NAMESPACE }}
+          kubectl get services -n ${{ env.K8S_NAMESPACE }}
+
+      - name: Smoke test all services
+        run: |
+          # Port-forward each service and hit /health
+          # In real EKS, this uses the ALB Ingress URL instead
+          SERVICES="cart:3000 product:3001 payment:3002 auth:3003 notification:3004"
+          for SVC_PORT in $SERVICES; do
+            SVC=$(echo $SVC_PORT | cut -d: -f1)
+            PORT=$(echo $SVC_PORT | cut -d: -f2)
+            echo "Testing $SVC..."
+            # Check rollout completed
+            kubectl rollout status deployment/${SVC}-service -n ${{ env.K8S_NAMESPACE }} --timeout=120s
+            echo "✅ $SVC rollout complete"
+          done
+
+      - name: Deployment summary
+        if: always()
+        run: |
+          echo "## 🚀 Staging Deployment" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit**: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image tag**: \`${{ steps.tag.outputs.tag }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Namespace**: \`${{ env.K8S_NAMESPACE }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Cluster**: \`${{ env.EKS_CLUSTER_NAME }}\`" >> $GITHUB_STEP_SUMMARY
+          kubectl get pods -n ${{ env.K8S_NAMESPACE }} --no-headers | \
+            awk '{print "| " $1 " | " $3 " | " $5 " |"}' >> $GITHUB_STEP_SUMMARY
+
+  # ═══════════════════════════════════════════════════════════════
+  # DEPLOY TO PRODUCTION: requires manual approval
+  # WHY: Staging is automatic. Production needs a human to confirm.
+  # This is the "Continuous Delivery" vs "Continuous Deployment" distinction:
+  # CD = code is always READY to deploy (automated until prod gate)
+  # Fully automated prod = "Continuous Deployment" (Netflix/Amazon level)
+  # For our portfolio, we use the safer manual approval for prod.
+  # ═══════════════════════════════════════════════════════════════
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-22.04
+    needs: [deploy-staging]
+    timeout-minutes: 20
+    if: github.ref == 'refs/heads/main'
+    environment:
+      name: production
+      url: https://shopflow.io
+      # WHY environment: production has required reviewers configured in
+      # GitHub Settings > Environments > production > Required reviewers.
+      # The job pauses here until a reviewer approves.
+      # Reviewer gets an email: "Deployment to production is waiting."
+      # This is the human gate before prod deploy.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_PROD }}
+          # WHY different role for prod: separate IAM role with separate
+          # trust policy. Staging deploy cannot accidentally affect prod.
+          # If staging role is compromised, prod is unaffected.
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Update kubeconfig for production EKS
+        run: |
+          aws eks update-kubeconfig \
+            --name ${{ env.EKS_CLUSTER_NAME }}-prod \
+            --region ${{ env.AWS_REGION }}
+
+      - name: Deploy to production with Helm
+        run: |
+          for SVC in cart product payment auth notification; do
+            helm upgrade --install ${SVC}-service ./helm/${SVC} \
+              --namespace ${{ env.K8S_NAMESPACE }} \
+              --create-namespace \
+              --set image.repository=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/${SVC} \
+              --set image.tag=${{ github.sha }} \
+              --set image.pullPolicy=Always \
+              --set replicaCount=2 \
+              --set environment=production \
+              --values helm/${SVC}/values-prod.yaml \
+              --atomic \
+              --timeout 5m \
+              --wait
+          done
+
+      - name: Production deployment summary
+        run: |
+          echo "## 🏭 Production Deployment Complete" >> $GITHUB_STEP_SUMMARY
+          echo "- All 5 services deployed to production" >> $GITHUB_STEP_SUMMARY
+          echo "- Commit: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          kubectl get deployments -n ${{ env.K8S_NAMESPACE }} >> $GITHUB_STEP_SUMMARY

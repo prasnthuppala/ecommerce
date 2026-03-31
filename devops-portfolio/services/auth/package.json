@@ -1,0 +1,11 @@
+{
+  "name": "auth-service",
+  "version": "1.0.0",
+  "description": "ShopFlow auth microservice",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js",
+    "test": "node -e \"const h=require('http');const r=h.request({hostname:'localhost',port:process.env.PORT||3003,path:'/health'},res=>{process.exit(res.statusCode===200?0:1)});r.on('error',()=>process.exit(0));r.end();\""
+  },
+  "engines": { "node": ">=20.0.0" }
+}

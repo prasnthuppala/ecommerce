@@ -1,0 +1,1151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ShopFlow — Microservices Dashboard</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Cabinet+Grotesk:wght@300;400;500;700;800&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#f7f5f2;--bg2:#eeeae4;--bg3:#e4dfd8;
+  --ink:#17191f;--ink2:#2d3142;--ink3:#454a60;
+  --muted:#8a8f9e;--border:#ddd9d2;
+  --teal:#0f766e;--teal-l:#d1fae5;--teal-t:rgba(15,118,110,0.1);
+  --amber:#b45309;--amber-l:#fef3c7;
+  --rose:#be123c;--rose-l:#ffe4e6;
+  --sky:#0369a1;--sky-l:#e0f2fe;
+  --purple:#6d28d9;--purple-l:#ede9fe;
+  --white:#ffffff;
+  --shadow:0 1px 3px rgba(0,0,0,0.08),0 1px 2px rgba(0,0,0,0.04);
+  --shadow-md:0 4px 12px rgba(0,0,0,0.08);
+  --r:8px;--r-lg:14px;--r-xl:20px;
+  --mono:'DM Mono',monospace;
+  --display:'Cabinet Grotesk',sans-serif;
+  --sans:'DM Sans',sans-serif;
+  --sidebar:240px;
+}
+html{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:14px;line-height:1.6}
+body{display:grid;grid-template-columns:var(--sidebar) 1fr;grid-template-rows:auto 1fr;min-height:100vh}
+
+/* ── SIDEBAR ── */
+.sidebar{
+  grid-row:1/3;background:var(--ink2);color:#c8cdd8;
+  display:flex;flex-direction:column;
+  border-right:1px solid rgba(255,255,255,0.06);
+  position:sticky;top:0;height:100vh;overflow-y:auto;
+}
+.brand{padding:22px 20px 18px;border-bottom:1px solid rgba(255,255,255,0.07)}
+.brand-top{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+.brand-icon{
+  width:34px;height:34px;background:var(--teal);border-radius:8px;
+  display:flex;align-items:center;justify-content:center;font-size:17px;flex-shrink:0;
+}
+.brand-name{font-family:var(--display);font-size:18px;font-weight:700;color:#f0eee9}
+.brand-name span{color:#5eead4}
+.env-badge{
+  display:flex;align-items:center;gap:6px;
+  padding:5px 10px;background:rgba(94,234,212,0.1);
+  border:1px solid rgba(94,234,212,0.2);border-radius:20px;
+  font-family:var(--mono);font-size:10px;color:#5eead4;
+}
+.pulse{width:7px;height:7px;border-radius:50%;background:#5eead4;animation:pulse 2s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:0.5;transform:scale(0.85)}}
+
+.nav-section{padding:16px 12px 4px;font-family:var(--mono);font-size:9px;letter-spacing:2px;text-transform:uppercase;color:rgba(200,205,216,0.35)}
+.nav-item{
+  display:flex;align-items:center;gap:9px;padding:8px 20px;
+  font-size:13px;color:rgba(200,205,216,0.65);cursor:pointer;
+  border-left:2px solid transparent;transition:all 0.15s;text-decoration:none;
+}
+.nav-item:hover{background:rgba(255,255,255,0.05);color:#d8dce8;border-left-color:rgba(255,255,255,0.1)}
+.nav-item.active{background:rgba(94,234,212,0.07);color:#5eead4;border-left-color:#5eead4}
+.nav-item svg{width:14px;height:14px;flex-shrink:0;opacity:0.8}
+.nav-count{margin-left:auto;padding:1px 6px;background:var(--teal);border-radius:10px;font-family:var(--mono);font-size:9px;color:#fff}
+
+.services-list{padding:8px 12px}
+.svc-item{
+  display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:var(--r);
+  cursor:pointer;transition:background 0.1s;margin-bottom:2px;
+}
+.svc-item:hover{background:rgba(255,255,255,0.05)}
+.svc-item.selected{background:rgba(94,234,212,0.08)}
+.svc-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.svc-dot.ok{background:#5eead4}
+.svc-dot.warn{background:#fbbf24;animation:pulse 1.5s infinite}
+.svc-dot.err{background:#f87171}
+.svc-dot.unknown{background:#6b7280}
+.svc-name{font-size:12px;color:rgba(200,205,216,0.8);flex:1}
+.svc-port{font-family:var(--mono);font-size:9px;color:rgba(200,205,216,0.3)}
+
+.sidebar-bottom{
+  margin-top:auto;padding:14px 20px;border-top:1px solid rgba(255,255,255,0.07);
+  font-family:var(--mono);font-size:10px;color:rgba(200,205,216,0.3);
+}
+
+/* ── TOPBAR ── */
+.topbar{
+  grid-column:2;background:var(--white);border-bottom:1px solid var(--border);
+  padding:0 28px;height:56px;display:flex;align-items:center;justify-content:space-between;
+  position:sticky;top:0;z-index:50;
+}
+.topbar-left{display:flex;align-items:center;gap:14px}
+.breadcrumb{font-family:var(--mono);font-size:11px;color:var(--muted)}
+.breadcrumb b{color:var(--ink);font-weight:500}
+.tab-bar{display:flex;gap:0;border-bottom:2px solid transparent}
+.tab-btn{
+  padding:0 16px;height:54px;font-size:13px;font-weight:500;
+  color:var(--muted);border:none;background:none;cursor:pointer;
+  border-bottom:2px solid transparent;margin-bottom:-2px;transition:all 0.15s;
+}
+.tab-btn.active{color:var(--teal);border-bottom-color:var(--teal)}
+.tab-btn:hover:not(.active){color:var(--ink)}
+.topbar-right{display:flex;align-items:center;gap:8px}
+.btn{
+  padding:7px 14px;border-radius:var(--r);font-size:12px;font-weight:500;
+  cursor:pointer;border:1px solid;transition:all 0.15s;font-family:var(--sans);
+}
+.btn-ghost{background:none;border-color:var(--border);color:var(--ink)}
+.btn-ghost:hover{background:var(--bg);border-color:var(--bg3)}
+.btn-primary{background:var(--teal);border-color:var(--teal);color:#fff}
+.btn-primary:hover{background:#0d9488}
+.refresh-spinner{display:inline-block;animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ── MAIN ── */
+.main{grid-column:2;padding:24px 28px;overflow-y:auto}
+
+/* ── VIEWS ── */
+.view{display:none}
+.view.active{display:block}
+
+/* ── BANNER ── */
+.banner{
+  background:var(--ink2);border-radius:var(--r-xl);padding:24px 28px;
+  margin-bottom:22px;display:flex;align-items:center;justify-content:space-between;
+  position:relative;overflow:hidden;
+}
+.banner::after{
+  content:'';position:absolute;right:-30px;top:-30px;
+  width:180px;height:180px;border-radius:50%;
+  background:radial-gradient(circle,rgba(94,234,212,0.08),transparent 70%);
+  pointer-events:none;
+}
+.banner-text h1{font-family:var(--display);font-size:22px;font-weight:700;color:#f0eee9;margin-bottom:3px}
+.banner-text h1 span{color:#5eead4}
+.banner-text p{font-size:12px;color:#8a9099;font-family:var(--mono)}
+.banner-stats{display:flex;gap:24px}
+.bstat{text-align:center}
+.bstat-val{font-family:var(--display);font-size:22px;font-weight:700;color:#5eead4}
+.bstat-lbl{font-family:var(--mono);font-size:9px;color:#8a9099;text-transform:uppercase;letter-spacing:1px}
+
+/* ── KPI GRID ── */
+.kpi-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:22px}
+.kpi{
+  background:var(--white);border:1px solid var(--border);border-radius:var(--r-lg);
+  padding:18px 20px;box-shadow:var(--shadow);transition:transform 0.15s,box-shadow 0.15s;
+  position:relative;overflow:hidden;
+}
+.kpi:hover{transform:translateY(-2px);box-shadow:var(--shadow-md)}
+.kpi::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;border-radius:var(--r-lg) var(--r-lg) 0 0}
+.kpi.teal::before{background:var(--teal)}
+.kpi.amber::before{background:var(--amber)}
+.kpi.sky::before{background:var(--sky)}
+.kpi.rose::before{background:var(--rose)}
+.kpi.purple::before{background:var(--purple)}
+.kpi-lbl{font-family:var(--mono);font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);margin-bottom:8px}
+.kpi-val{font-family:var(--display);font-size:28px;font-weight:700;color:var(--ink);line-height:1}
+.kpi-val sup{font-size:13px;font-family:var(--sans);font-weight:400;color:var(--muted);margin-right:2px}
+.kpi-sub{font-size:11px;color:var(--muted);margin-top:6px;display:flex;align-items:center;gap:4px}
+.trend-up{color:var(--teal)}
+.trend-dn{color:var(--rose)}
+
+/* ── TWO COL ── */
+.two-col{display:grid;grid-template-columns:1fr 340px;gap:18px;margin-bottom:18px}
+.three-col{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:18px}
+
+/* ── CARD ── */
+.card{background:var(--white);border:1px solid var(--border);border-radius:var(--r-lg);box-shadow:var(--shadow);overflow:hidden}
+.card-head{padding:16px 20px;border-bottom:1px solid var(--bg2);display:flex;align-items:flex-start;justify-content:space-between}
+.card-title{font-family:var(--display);font-size:14px;font-weight:700;color:var(--ink)}
+.card-sub{font-family:var(--mono);font-size:10px;color:var(--muted);margin-top:2px}
+.card-link{font-family:var(--mono);font-size:10px;color:var(--teal);cursor:pointer;text-decoration:none;white-space:nowrap;padding-top:2px}
+.card-body{padding:20px}
+
+/* ── SERVICE HEALTH CARDS ── */
+.health-cards{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:22px}
+.hc{
+  background:var(--white);border:1px solid var(--border);border-radius:var(--r-lg);
+  padding:16px;text-align:center;cursor:pointer;transition:all 0.15s;box-shadow:var(--shadow);
+}
+.hc:hover{transform:translateY(-2px);box-shadow:var(--shadow-md)}
+.hc.selected{border-color:var(--teal);box-shadow:0 0 0 2px var(--teal-t)}
+.hc-emoji{font-size:24px;margin-bottom:8px;display:block}
+.hc-name{font-family:var(--display);font-size:12px;font-weight:700;color:var(--ink);margin-bottom:4px}
+.hc-status{font-family:var(--mono);font-size:10px}
+.hc-status.ok{color:var(--teal)}
+.hc-status.warn{color:var(--amber)}
+.hc-status.err{color:var(--rose)}
+.hc-status.loading{color:var(--muted)}
+.hc-meta{font-family:var(--mono);font-size:9px;color:var(--muted);margin-top:3px}
+
+/* ── SERVICE DETAIL ── */
+.svc-detail{background:var(--white);border:1px solid var(--border);border-radius:var(--r-lg);box-shadow:var(--shadow);margin-bottom:18px}
+.svc-detail-head{
+  padding:16px 20px;border-bottom:1px solid var(--bg2);
+  display:flex;align-items:center;justify-content:space-between;
+}
+.svc-detail-title{display:flex;align-items:center;gap:10px}
+.svc-status-badge{
+  display:flex;align-items:center;gap:5px;
+  padding:4px 12px;border-radius:20px;
+  font-family:var(--mono);font-size:10px;font-weight:500;
+}
+.badge-ok{background:var(--teal-l);color:var(--teal)}
+.badge-err{background:var(--rose-l);color:var(--rose)}
+.badge-loading{background:var(--bg2);color:var(--muted)}
+.svc-detail-body{padding:20px}
+.detail-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.detail-metric{
+  background:var(--bg);border-radius:var(--r);padding:14px;
+}
+.detail-metric-lbl{font-family:var(--mono);font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);margin-bottom:6px}
+.detail-metric-val{font-family:var(--display);font-size:18px;font-weight:700;color:var(--ink)}
+.json-view{
+  background:var(--ink2);border-radius:var(--r);padding:14px;
+  font-family:var(--mono);font-size:11px;color:#5eead4;
+  overflow:auto;max-height:200px;margin-top:14px;
+}
+.json-key{color:#94a3b8}
+.json-str{color:#5eead4}
+.json-num{color:#fbbf24}
+.json-bool{color:#f87171}
+
+/* ── PRODUCTS TABLE ── */
+.tbl{width:100%;border-collapse:collapse}
+.tbl th{padding:8px 12px;text-align:left;font-family:var(--mono);font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);border-bottom:1px solid var(--bg2)}
+.tbl td{padding:11px 12px;border-bottom:1px solid var(--bg2);vertical-align:middle}
+.tbl tr:last-child td{border-bottom:none}
+.tbl tr:hover td{background:var(--bg)}
+.prod-cell{display:flex;align-items:center;gap:10px}
+.prod-emoji{font-size:22px;flex-shrink:0}
+.prod-name{font-size:13px;font-weight:500;color:var(--ink)}
+.prod-sku{font-family:var(--mono);font-size:9px;color:var(--muted);margin-top:1px}
+.price{font-family:var(--mono);font-size:12px;font-weight:500}
+.stock-pill{
+  display:inline-flex;align-items:center;gap:4px;
+  padding:3px 9px;border-radius:20px;font-family:var(--mono);font-size:9px;font-weight:500;
+}
+.stock-ok{background:var(--teal-l);color:var(--teal)}
+.stock-low{background:var(--amber-l);color:var(--amber)}
+.stock-out{background:var(--rose-l);color:var(--rose)}
+.rating{display:flex;align-items:center;gap:3px;font-family:var(--mono);font-size:11px;color:var(--amber)}
+
+/* ── CART ── */
+.cart-header{display:flex;align-items:center;gap:10px;margin-bottom:16px}
+.user-select{padding:7px 12px;border:1px solid var(--border);border-radius:var(--r);font-family:var(--mono);font-size:12px;background:var(--bg);color:var(--ink);cursor:pointer}
+.add-form{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}
+.add-select{flex:1;min-width:180px;padding:8px 12px;border:1px solid var(--border);border-radius:var(--r);font-family:var(--sans);font-size:13px;background:var(--bg)}
+.add-btn{padding:8px 16px;background:var(--teal);border:none;border-radius:var(--r);color:#fff;font-size:12px;font-weight:500;cursor:pointer;white-space:nowrap}
+.add-btn:hover{background:#0d9488}
+.cart-item{
+  display:flex;align-items:center;gap:12px;padding:12px;
+  background:var(--bg);border-radius:var(--r);margin-bottom:8px;
+}
+.ci-emoji{font-size:24px;flex-shrink:0}
+.ci-info{flex:1}
+.ci-name{font-size:13px;font-weight:500}
+.ci-sku{font-family:var(--mono);font-size:9px;color:var(--muted)}
+.qty-ctrl{display:inline-flex;align-items:center;border:1px solid var(--border);border-radius:var(--r);overflow:hidden}
+.qty-btn{width:26px;height:26px;border:none;background:var(--white);cursor:pointer;font-size:13px;display:flex;align-items:center;justify-content:center;transition:background 0.1s}
+.qty-btn:hover{background:var(--bg2)}
+.qty-num{padding:0 10px;font-family:var(--mono);font-size:12px;color:var(--ink)}
+.ci-price{font-family:var(--mono);font-size:12px;font-weight:500;min-width:70px;text-align:right}
+.ci-remove{width:26px;height:26px;border:none;background:none;cursor:pointer;color:var(--muted);font-size:16px;border-radius:var(--r);display:flex;align-items:center;justify-content:center;transition:all 0.1s}
+.ci-remove:hover{background:var(--rose-l);color:var(--rose)}
+.cart-total{
+  background:var(--ink2);border-radius:var(--r-lg);padding:16px 18px;
+  display:flex;justify-content:space-between;align-items:center;margin-top:12px;
+}
+.ct-label{font-family:var(--mono);font-size:11px;color:#8a9099;text-transform:uppercase;letter-spacing:1px}
+.ct-value{font-family:var(--display);font-size:20px;font-weight:700;color:#5eead4}
+.checkout-btn{
+  width:100%;margin-top:12px;padding:12px;background:var(--teal);border:none;
+  border-radius:var(--r);color:#fff;font-size:12px;font-weight:600;
+  font-family:var(--sans);cursor:pointer;letter-spacing:0.5px;text-transform:uppercase;
+  transition:all 0.15s;
+}
+.checkout-btn:hover{background:#0d9488;transform:translateY(-1px);box-shadow:0 4px 12px rgba(15,118,110,0.3)}
+
+/* ── PIPELINE ── */
+.pipeline{display:flex;align-items:center;gap:0}
+.stage{flex:1;text-align:center;padding:12px 6px;position:relative}
+.stage::after{content:'→';position:absolute;right:-8px;top:50%;transform:translateY(-50%);color:var(--muted);font-size:12px;z-index:1}
+.stage:last-child::after{display:none}
+.stage-icon{font-size:20px;display:block;margin-bottom:4px}
+.stage-name{font-family:var(--mono);font-size:10px;color:var(--muted);display:block;margin-bottom:2px}
+.stage-status{font-size:10px;font-family:var(--mono);font-weight:500}
+.ss-ok{color:var(--teal)}
+.ss-run{color:var(--amber)}
+.ss-wait{color:var(--muted)}
+.ss-fail{color:var(--rose)}
+
+/* ── PAYMENT ── */
+.txn-item{display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--bg2)}
+.txn-item:last-child{border-bottom:none}
+.txn-icon{width:34px;height:34px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:15px;flex-shrink:0}
+.txn-body{flex:1}
+.txn-id{font-family:var(--mono);font-size:11px;font-weight:500;color:var(--ink)}
+.txn-meta{font-family:var(--mono);font-size:9px;color:var(--muted);margin-top:1px}
+.txn-amount{font-family:var(--mono);font-size:12px;font-weight:500}
+.txn-ok{color:var(--teal)}
+.txn-fail{color:var(--rose)}
+
+/* ── NOTIFICATIONS ── */
+.notif-item{display:flex;align-items:flex-start;gap:10px;padding:10px 0;border-bottom:1px solid var(--bg2)}
+.notif-item:last-child{border-bottom:none}
+.notif-icon{width:30px;height:30px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0}
+.notif-body h5{font-size:12px;font-weight:500;color:var(--ink);margin-bottom:2px}
+.notif-body p{font-size:11px;color:var(--muted)}
+.notif-time{font-family:var(--mono);font-size:9px;color:var(--muted);margin-left:auto;white-space:nowrap;padding-top:2px}
+
+/* ── AUTH ── */
+.user-card{display:flex;align-items:center;gap:12px;padding:10px;background:var(--bg);border-radius:var(--r);margin-bottom:8px}
+.user-avatar{width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:600;flex-shrink:0}
+.user-name{font-size:13px;font-weight:500;color:var(--ink)}
+.user-email{font-family:var(--mono);font-size:9px;color:var(--muted);margin-top:1px}
+.role-badge{margin-left:auto;padding:2px 8px;border-radius:20px;font-family:var(--mono);font-size:9px;font-weight:500}
+.role-admin{background:var(--purple-l);color:var(--purple)}
+.role-user{background:var(--sky-l);color:var(--sky)}
+
+/* ── SPARK CHART ── */
+.spark{display:flex;align-items:flex-end;gap:2px;height:36px;margin:10px 0 4px}
+.spark-bar{flex:1;border-radius:2px 2px 0 0;background:var(--teal-l);transition:height 0.3s;cursor:pointer;min-width:4px}
+.spark-bar:hover{background:var(--teal)}
+.spark-bar.peak{background:var(--teal)}
+.spark-footer{display:flex;justify-content:space-between;font-family:var(--mono);font-size:9px;color:var(--muted)}
+
+/* ── TOASTS ── */
+#toast{position:fixed;bottom:24px;right:24px;z-index:1000;display:flex;flex-direction:column;gap:8px;pointer-events:none}
+.toast{
+  padding:12px 16px;border-radius:var(--r);font-size:12px;font-weight:500;
+  box-shadow:0 4px 16px rgba(0,0,0,0.15);pointer-events:auto;
+  animation:slideIn 0.3s ease-out;max-width:280px;
+}
+@keyframes slideIn{from{transform:translateX(100%);opacity:0}to{transform:translateX(0);opacity:1}}
+.toast.ok{background:var(--teal);color:#fff}
+.toast.err{background:var(--rose);color:#fff}
+.toast.info{background:var(--ink2);color:#f0eee9}
+
+/* ── MISC ── */
+.tag{display:inline-flex;align-items:center;padding:2px 7px;border-radius:4px;font-family:var(--mono);font-size:9px;font-weight:500}
+.tag-k8s{background:var(--sky-l);color:var(--sky)}
+.tag-helm{background:var(--purple-l);color:var(--purple)}
+.tag-docker{background:#e0f2fe;color:#0369a1}
+.empty{text-align:center;padding:32px;color:var(--muted);font-size:13px}
+.loading-dots{display:inline-flex;gap:4px}
+.loading-dots span{width:5px;height:5px;border-radius:50%;background:var(--muted);animation:dot 1.4s ease-in-out infinite}
+.loading-dots span:nth-child(2){animation-delay:0.2s}
+.loading-dots span:nth-child(3){animation-delay:0.4s}
+@keyframes dot{0%,80%,100%{transform:scale(0.6);opacity:0.4}40%{transform:scale(1);opacity:1}}
+
+/* ── FOOTER ── */
+footer{
+  grid-column:2;border-top:1px solid var(--border);background:var(--white);
+  padding:12px 28px;display:flex;justify-content:space-between;align-items:center;
+  font-family:var(--mono);font-size:9px;color:var(--muted);
+}
+.footer-tags{display:flex;gap:6px}
+
+@media(max-width:1100px){
+  .kpi-grid{grid-template-columns:repeat(2,1fr)}
+  .health-cards{grid-template-columns:repeat(3,1fr)}
+  .two-col{grid-template-columns:1fr}
+}
+@media(max-width:768px){
+  :root{--sidebar:0px}
+  .sidebar{display:none}
+  .topbar,.main,footer{grid-column:1/3}
+}
+</style>
+</head>
+<body>
+
+<!-- ══════════════ SIDEBAR ══════════════ -->
+<aside class="sidebar">
+  <div class="brand">
+    <div class="brand-top">
+      <div class="brand-icon">🛍</div>
+      <div class="brand-name">Shop<span>Flow</span></div>
+    </div>
+    <div class="env-badge"><span class="pulse"></span><span id="env-label">Local · Minikube</span></div>
+  </div>
+
+  <div class="nav-section">Platform</div>
+  <a class="nav-item active" onclick="showView('overview',this)">
+    <svg viewBox="0 0 16 16" fill="currentColor"><rect x="1" y="1" width="6" height="6" rx="1"/><rect x="9" y="1" width="6" height="6" rx="1"/><rect x="1" y="9" width="6" height="6" rx="1"/><rect x="9" y="9" width="6" height="6" rx="1"/></svg>
+    Overview
+  </a>
+  <a class="nav-item" onclick="showView('products',this)">
+    <svg viewBox="0 0 16 16" fill="currentColor"><path d="M1 2h1.5l2.7 7h7.3l1.5-5H4.2"/><circle cx="6" cy="13" r="1.2"/><circle cx="11" cy="13" r="1.2"/></svg>
+    Products
+  </a>
+  <a class="nav-item" onclick="showView('cart',this)">
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="4" width="12" height="9" rx="1.5"/><path d="M5 4V3a3 3 0 0 1 6 0v1"/></svg>
+    Cart
+    <span class="nav-count" id="nav-cart-count">0</span>
+  </a>
+  <a class="nav-item" onclick="showView('payment',this)">
+    <svg viewBox="0 0 16 16" fill="currentColor"><rect x="1" y="4" width="14" height="9" rx="1.5"/><path d="M1 7h14"/></svg>
+    Payments
+  </a>
+  <a class="nav-item" onclick="showView('auth',this)">
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="6" r="3"/><path d="M2 14c0-3.3 2.7-6 6-6s6 2.7 6 6"/></svg>
+    Auth & Users
+  </a>
+  <a class="nav-item" onclick="showView('notifications',this)">
+    <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1a5 5 0 0 0-5 5v3l-1.5 2h13L13 9V6a5 5 0 0 0-5-5zm0 14a2 2 0 0 0 2-2H6a2 2 0 0 0 2 2z"/></svg>
+    Notifications
+  </a>
+
+  <div class="nav-section" style="margin-top:8px">Services</div>
+  <div class="services-list" id="services-nav">
+    <div class="svc-item selected" onclick="selectService('cart')"><span class="svc-dot unknown" id="dot-cart"></span><span class="svc-name">cart</span><span class="svc-port">:3000</span></div>
+    <div class="svc-item" onclick="selectService('product')"><span class="svc-dot unknown" id="dot-product"></span><span class="svc-name">product</span><span class="svc-port">:3001</span></div>
+    <div class="svc-item" onclick="selectService('payment')"><span class="svc-dot unknown" id="dot-payment"></span><span class="svc-name">payment</span><span class="svc-port">:3002</span></div>
+    <div class="svc-item" onclick="selectService('auth')"><span class="svc-dot unknown" id="dot-auth"></span><span class="svc-name">auth</span><span class="svc-port">:3003</span></div>
+    <div class="svc-item" onclick="selectService('notification')"><span class="svc-dot unknown" id="dot-notification"></span><span class="svc-name">notification</span><span class="svc-port">:3004</span></div>
+  </div>
+
+  <div class="sidebar-bottom">
+    <div>kubectl · Helm 3 · Minikube</div>
+    <div style="margin-top:4px">namespace: ecommerce</div>
+    <div id="last-refresh" style="margin-top:4px">Refreshing...</div>
+  </div>
+</aside>
+
+<!-- ══════════════ TOPBAR ══════════════ -->
+<header class="topbar">
+  <div class="topbar-left">
+    <div class="breadcrumb">shopflow / <b id="current-view-label">overview</b></div>
+    <div class="tab-bar">
+      <button class="tab-btn active" onclick="showView('overview',null)">Overview</button>
+      <button class="tab-btn" onclick="showView('products',null)">Products</button>
+      <button class="tab-btn" onclick="showView('cart',null)">Cart</button>
+      <button class="tab-btn" onclick="showView('payment',null)">Payments</button>
+      <button class="tab-btn" onclick="showView('auth',null)">Auth</button>
+    </div>
+  </div>
+  <div class="topbar-right">
+    <div id="port-config" style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-right:8px">
+      Ports: 3000-3004
+    </div>
+    <button class="btn btn-ghost" id="refresh-btn" onclick="refreshAll()">↻ Refresh</button>
+    <button class="btn btn-primary" onclick="showPortConfig()">⚙ Configure</button>
+  </div>
+</header>
+
+<!-- ══════════════ MAIN ══════════════ -->
+<main class="main">
+
+  <!-- ── PORT CONFIG MODAL ── -->
+  <div id="config-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:200;display:flex;align-items:center;justify-content:center">
+    <div style="background:var(--white);border-radius:var(--r-xl);padding:28px;width:400px;box-shadow:0 20px 60px rgba(0,0,0,0.2)">
+      <h3 style="font-family:var(--display);font-size:18px;font-weight:700;margin-bottom:6px">Configure Port Forwards</h3>
+      <p style="font-size:12px;color:var(--muted);margin-bottom:18px">Set the localhost ports for each kubectl port-forward</p>
+      <div id="port-inputs" style="display:flex;flex-direction:column;gap:8px;margin-bottom:18px"></div>
+      <div style="display:flex;gap:8px;justify-content:flex-end">
+        <button class="btn btn-ghost" onclick="closeConfig()">Cancel</button>
+        <button class="btn btn-primary" onclick="saveConfig()">Save & Reconnect</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ VIEW: OVERVIEW ══ -->
+  <div class="view active" id="view-overview">
+    <div class="banner">
+      <div class="banner-text">
+        <h1>E-Commerce <span>Microservices</span></h1>
+        <p>5 services · Kubernetes · Helm · GitHub Actions CI/CD</p>
+        <div style="display:flex;gap:8px;margin-top:10px">
+          <span class="tag tag-k8s">kubernetes</span>
+          <span class="tag tag-docker">docker alpine</span>
+          <span class="tag tag-helm">helm 3</span>
+        </div>
+      </div>
+      <div class="banner-stats">
+        <div class="bstat"><div class="bstat-val" id="b-healthy">–</div><div class="bstat-lbl">Healthy</div></div>
+        <div class="bstat"><div class="bstat-val" id="b-total">5</div><div class="bstat-lbl">Services</div></div>
+        <div class="bstat"><div class="bstat-val" id="b-uptime">–</div><div class="bstat-lbl">Avg Uptime</div></div>
+      </div>
+    </div>
+
+    <!-- Health cards -->
+    <div class="health-cards" id="health-cards">
+      <div class="hc selected" onclick="selectService('cart')"><span class="hc-emoji">🛒</span><div class="hc-name">cart</div><div class="hc-status loading" id="hcs-cart">checking…</div><div class="hc-meta">port <span id="hcp-cart">3000</span></div></div>
+      <div class="hc" onclick="selectService('product')"><span class="hc-emoji">📦</span><div class="hc-name">product</div><div class="hc-status loading" id="hcs-product">checking…</div><div class="hc-meta">port <span id="hcp-product">3001</span></div></div>
+      <div class="hc" onclick="selectService('payment')"><span class="hc-emoji">💳</span><div class="hc-name">payment</div><div class="hc-status loading" id="hcs-payment">checking…</div><div class="hc-meta">port <span id="hcp-payment">3002</span></div></div>
+      <div class="hc" onclick="selectService('auth')"><span class="hc-emoji">🔐</span><div class="hc-name">auth</div><div class="hc-status loading" id="hcs-auth">checking…</div><div class="hc-meta">port <span id="hcp-auth">3003</span></div></div>
+      <div class="hc" onclick="selectService('notification')"><span class="hc-emoji">🔔</span><div class="hc-name">notification</div><div class="hc-status loading" id="hcs-notification">checking…</div><div class="hc-meta">port <span id="hcp-notification">3004</span></div></div>
+    </div>
+
+    <!-- KPIs -->
+    <div class="kpi-grid">
+      <div class="kpi teal"><div class="kpi-lbl">Active Carts</div><div class="kpi-val" id="k-carts">–</div><div class="kpi-sub trend-up">Live from cart service</div></div>
+      <div class="kpi amber"><div class="kpi-lbl">Products</div><div class="kpi-val" id="k-products">–</div><div class="kpi-sub">from product service</div></div>
+      <div class="kpi sky"><div class="kpi-lbl">Active Sessions</div><div class="kpi-val" id="k-sessions">–</div><div class="kpi-sub">from auth service</div></div>
+      <div class="kpi purple"><div class="kpi-lbl">Notifications Sent</div><div class="kpi-val" id="k-notifs">–</div><div class="kpi-sub">from notification service</div></div>
+    </div>
+
+    <!-- Service detail + Pipeline -->
+    <div class="two-col">
+      <!-- Selected service detail -->
+      <div>
+        <div class="svc-detail">
+          <div class="svc-detail-head">
+            <div class="svc-detail-title">
+              <span id="sd-emoji" style="font-size:20px">🛒</span>
+              <div>
+                <div style="font-family:var(--display);font-size:14px;font-weight:700" id="sd-name">cart-service</div>
+                <div style="font-family:var(--mono);font-size:10px;color:var(--muted)">localhost:<span id="sd-port">3000</span> → /health</div>
+              </div>
+            </div>
+            <span class="svc-status-badge badge-loading" id="sd-badge"><span class="loading-dots"><span></span><span></span><span></span></span></span>
+          </div>
+          <div class="svc-detail-body">
+            <div class="detail-grid" id="sd-metrics">
+              <div class="detail-metric"><div class="detail-metric-lbl">Status</div><div class="detail-metric-val" id="sdm-status">–</div></div>
+              <div class="detail-metric"><div class="detail-metric-lbl">Uptime</div><div class="detail-metric-val" id="sdm-uptime">–</div></div>
+              <div class="detail-metric"><div class="detail-metric-lbl">Version</div><div class="detail-metric-val" id="sdm-version">–</div></div>
+            </div>
+            <div class="json-view" id="sd-json">
+              <span style="color:var(--muted)">// Click a service to load health data</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Request rate chart -->
+        <div class="card">
+          <div class="card-head"><div><div class="card-title">Request Rate</div><div class="card-sub">Simulated traffic — last 24 bars</div></div></div>
+          <div class="card-body">
+            <div class="spark" id="spark"></div>
+            <div class="spark-footer"><span>24h ago</span><span>12h ago</span><span>now</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Pipeline -->
+      <div>
+        <div class="card" style="margin-bottom:14px">
+          <div class="card-head"><div class="card-title">CI/CD Pipeline</div><div class="card-sub">GitHub Actions</div></div>
+          <div class="card-body">
+            <div class="pipeline">
+              <div class="stage"><span class="stage-icon">✅</span><span class="stage-name">Lint</span><span class="stage-status ss-ok">Passed</span></div>
+              <div class="stage"><span class="stage-icon">✅</span><span class="stage-name">Test</span><span class="stage-status ss-ok">Passed</span></div>
+              <div class="stage"><span class="stage-icon">✅</span><span class="stage-name">Trivy</span><span class="stage-status ss-ok">0 CVEs</span></div>
+              <div class="stage"><span class="stage-icon">✅</span><span class="stage-name">Build</span><span class="stage-status ss-ok">Pushed</span></div>
+              <div class="stage"><span class="stage-icon">🚀</span><span class="stage-name">Deploy</span><span class="stage-status ss-ok">Live</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="card" style="margin-bottom:14px">
+          <div class="card-head"><div class="card-title">Kubernetes</div><div class="card-sub">ecommerce namespace</div></div>
+          <div class="card-body">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+              <div style="background:var(--bg);border-radius:var(--r);padding:10px 12px"><div style="font-family:var(--mono);font-size:9px;color:var(--muted);margin-bottom:4px">PODS</div><div style="font-family:var(--display);font-size:18px;font-weight:700">5 <span style="font-size:12px;color:var(--teal)">Running</span></div></div>
+              <div style="background:var(--bg);border-radius:var(--r);padding:10px 12px"><div style="font-family:var(--mono);font-size:9px;color:var(--muted);margin-bottom:4px">SERVICES</div><div style="font-family:var(--display);font-size:18px;font-weight:700">5 <span style="font-size:12px;color:var(--teal)">ClusterIP</span></div></div>
+              <div style="background:var(--bg);border-radius:var(--r);padding:10px 12px"><div style="font-family:var(--mono);font-size:9px;color:var(--muted);margin-bottom:4px">HPA</div><div style="font-family:var(--display);font-size:18px;font-weight:700">Auto</div></div>
+              <div style="background:var(--bg);border-radius:var(--r);padding:10px 12px"><div style="font-family:var(--mono);font-size:9px;color:var(--muted);margin-bottom:4px">NAMESPACE</div><div style="font-family:var(--display);font-size:18px;font-weight:700">ecommerce</div></div>
+            </div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><div class="card-title">Port Forwards Active</div><div class="card-sub">kubectl port-forward</div></div>
+          <div class="card-body" style="padding:12px 20px">
+            <div id="pf-status" style="font-family:var(--mono);font-size:11px;line-height:2;color:var(--muted)">Checking...</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ VIEW: PRODUCTS ══ -->
+  <div class="view" id="view-products">
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-head"><div><div class="card-title">Product Catalog</div><div class="card-sub" id="prod-sub">Loading from product service...</div></div><a class="card-link" href="#" onclick="fetchProducts()">↻ Reload</a></div>
+      <div class="card-body" style="padding:0">
+        <table class="tbl">
+          <thead><tr><th>Product</th><th>Category</th><th>Price</th><th>Stock</th><th>Rating</th></tr></thead>
+          <tbody id="products-tbody"><tr><td colspan="5" class="empty">Loading...</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="kpi-grid" id="product-kpis"></div>
+  </div>
+
+  <!-- ══ VIEW: CART ══ -->
+  <div class="view" id="view-cart">
+    <div class="two-col">
+      <div class="card">
+        <div class="card-head"><div><div class="card-title">Shopping Cart</div><div class="card-sub">Live from cart-service</div></div></div>
+        <div class="card-body">
+          <div class="cart-header">
+            <label style="font-family:var(--mono);font-size:11px;color:var(--muted)">User:</label>
+            <select class="user-select" id="cart-user" onchange="fetchCart()">
+              <option value="usr_001">usr_001 — Prasanth</option>
+              <option value="usr_002">usr_002 — Priya</option>
+              <option value="usr_003">usr_003 — Rahul</option>
+            </select>
+          </div>
+          <div class="add-form">
+            <select class="add-select" id="add-product-select">
+              <option value="p1">👟 Air Runner Pro X — ₹12,999</option>
+              <option value="p2">📱 UltraPhone 15 Pro — ₹89,999</option>
+              <option value="p3">🎧 SoundPods Elite — ₹24,990</option>
+              <option value="p4">⌚ SmartWatch Series 9 — ₹41,900</option>
+              <option value="p5">💻 Gaming Laptop X1 — ₹1,24,999</option>
+            </select>
+            <button class="add-btn" onclick="addToCart()">+ Add to Cart</button>
+          </div>
+          <div id="cart-items"><div class="empty">Cart is empty</div></div>
+          <div class="cart-total">
+            <span class="ct-label">Total</span>
+            <span class="ct-value" id="cart-total">₹0</span>
+          </div>
+          <button class="checkout-btn" onclick="checkout()">Proceed to Checkout →</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-head"><div class="card-title">Cart Stats</div></div>
+        <div class="card-body" id="cart-stats-body"><div class="empty">Loading...</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ VIEW: PAYMENT ══ -->
+  <div class="view" id="view-payment">
+    <div class="two-col">
+      <div class="card">
+        <div class="card-head"><div><div class="card-title">Transactions</div><div class="card-sub">From payment service</div></div><a class="card-link" onclick="processTestPayment()">+ Test Payment</a></div>
+        <div class="card-body" id="txn-list"><div class="empty">No transactions yet</div></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><div class="card-title">Payment Stats</div></div>
+        <div class="card-body" id="payment-stats"><div class="empty">Loading...</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ VIEW: AUTH ══ -->
+  <div class="view" id="view-auth">
+    <div class="two-col">
+      <div class="card">
+        <div class="card-head"><div><div class="card-title">Users</div><div class="card-sub">From auth service</div></div></div>
+        <div class="card-body" id="auth-users"><div class="empty">Loading...</div></div>
+      </div>
+      <div>
+        <div class="card" style="margin-bottom:14px">
+          <div class="card-head"><div class="card-title">Auth Stats</div></div>
+          <div class="card-body" id="auth-stats"><div class="empty">Loading...</div></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><div class="card-title">Test Login</div></div>
+          <div class="card-body">
+            <div style="display:flex;flex-direction:column;gap:8px">
+              <input id="login-email" placeholder="email" value="prasanth@shopflow.io" style="padding:8px 12px;border:1px solid var(--border);border-radius:var(--r);font-family:var(--mono);font-size:12px;background:var(--bg)">
+              <button class="btn btn-primary" onclick="testLogin()">Test Login →</button>
+              <div id="login-result" style="font-family:var(--mono);font-size:11px;color:var(--muted)"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ VIEW: NOTIFICATIONS ══ -->
+  <div class="view" id="view-notifications">
+    <div class="two-col">
+      <div class="card">
+        <div class="card-head"><div><div class="card-title">Notifications</div><div class="card-sub">From notification service</div></div><a class="card-link" onclick="sendTestNotif()">+ Send Test</a></div>
+        <div class="card-body" id="notif-list"><div class="empty">No notifications yet</div></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><div class="card-title">Notification Stats</div></div>
+        <div class="card-body" id="notif-stats"><div class="empty">Loading...</div></div>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<footer>
+  <div>ShopFlow Microservices Portfolio · Project 1 · Prasanth Uppala</div>
+  <div class="footer-tags">
+    <span class="tag tag-k8s">EKS / Minikube</span>
+    <span class="tag tag-helm">Helm 3</span>
+    <span class="tag tag-docker">Docker Alpine</span>
+    <span style="background:var(--teal-l);color:var(--teal)" class="tag">GitHub Actions</span>
+    <span style="background:var(--amber-l);color:var(--amber)" class="tag">Prometheus</span>
+  </div>
+</footer>
+
+<div id="toast"></div>
+
+<script>
+// ═══════════════════════════════════════════════════════
+// CONFIG — ports that kubectl port-forward maps to localhost
+// These must match your actual port-forward commands
+// ═══════════════════════════════════════════════════════
+const CONFIG = {
+  services: {
+    cart:         { port: 3000, emoji: '🛒', color: '#0f766e' },
+    product:      { port: 3001, emoji: '📦', color: '#b45309' },
+    payment:      { port: 3002, emoji: '💳', color: '#0369a1' },
+    auth:         { port: 3003, emoji: '🔐', color: '#6d28d9' },
+    notification: { port: 3004, emoji: '🔔', color: '#be123c' },
+  }
+};
+
+// ── State ──
+const state = {
+  health: {},
+  selectedService: 'cart',
+  currentView: 'overview',
+  cart: { items: [], total: 0 },
+  products: [],
+  transactions: [],
+  notifications: [],
+};
+
+// ── Utilities ──
+const $ = id => document.getElementById(id);
+const fmt = n => `₹${Number(n).toLocaleString('en-IN')}`;
+const ago = (s) => {
+  const d = (Date.now() - new Date(s)) / 1000;
+  if(d < 60) return `${Math.floor(d)}s ago`;
+  if(d < 3600) return `${Math.floor(d/60)}m ago`;
+  return `${Math.floor(d/3600)}h ago`;
+};
+
+function showToast(msg, type='ok', dur=3000) {
+  const t = document.createElement('div');
+  t.className = `toast ${type}`;
+  t.textContent = msg;
+  $('toast').appendChild(t);
+  setTimeout(() => t.remove(), dur);
+}
+
+// ── API calls ──
+async function api(service, path, opts={}) {
+  const port = CONFIG.services[service].port;
+  const url = `http://localhost:${port}${path}`;
+  try {
+    const res = await fetch(url, {
+      ...opts,
+      headers: { 'Content-Type': 'application/json', ...opts.headers },
+    });
+    return await res.json();
+  } catch(e) {
+    return null; // service unreachable
+  }
+}
+
+// ── Navigation ──
+function showView(name, navEl) {
+  state.currentView = name;
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  document.querySelectorAll('.tab-btn, .nav-item').forEach(b => b.classList.remove('active'));
+  $(`view-${name}`).classList.add('active');
+  if(navEl) navEl.classList.add('active');
+  $('current-view-label').textContent = name;
+  // Load data for the view
+  if(name === 'products') fetchProducts();
+  if(name === 'cart') fetchCart();
+  if(name === 'payment') fetchPaymentData();
+  if(name === 'auth') fetchAuthData();
+  if(name === 'notifications') fetchNotifData();
+}
+
+// ── Service selection ──
+function selectService(name) {
+  state.selectedService = name;
+  const cfg = CONFIG.services[name];
+  document.querySelectorAll('.svc-item').forEach(i => i.classList.remove('selected'));
+  document.querySelectorAll('.hc').forEach(h => h.classList.remove('selected'));
+  loadServiceDetail(name);
+}
+
+async function loadServiceDetail(name) {
+  const cfg = CONFIG.services[name];
+  $('sd-emoji').textContent = cfg.emoji;
+  $('sd-name').textContent = `${name}-service`;
+  $('sd-port').textContent = cfg.port;
+  $('sd-badge').className = 'svc-status-badge badge-loading';
+  $('sd-badge').innerHTML = '<span class="loading-dots"><span></span><span></span><span></span></span>';
+  $('sd-json').innerHTML = '<span style="color:var(--muted)">// Fetching...</span>';
+
+  const data = await api(name, '/health');
+  if(!data) {
+    $('sd-badge').className = 'svc-status-badge badge-err';
+    $('sd-badge').textContent = '✗ Unreachable';
+    $('sd-json').innerHTML = `<span style="color:#f87171">// Service unreachable on port ${cfg.port}\n// Run: kubectl port-forward svc/${name}-service ${cfg.port}:80 -n ecommerce</span>`;
+    $('sdm-status').textContent = 'DOWN';
+    $('sdm-uptime').textContent = '–';
+    $('sdm-version').textContent = '–';
+    return;
+  }
+  $('sd-badge').className = 'svc-status-badge badge-ok';
+  $('sd-badge').textContent = '✓ Healthy';
+  $('sdm-status').textContent = data.status || '–';
+  $('sdm-uptime').textContent = data.uptime ? data.uptime + 's' : '–';
+  $('sdm-version').textContent = data.version || '1.0.0';
+
+  // Pretty-print JSON
+  const json = JSON.stringify(data, null, 2)
+    .replace(/"([^"]+)":/g, '<span class="json-key">"$1"</span>:')
+    .replace(/: "([^"]+)"/g, ': <span class="json-str">"$1"</span>')
+    .replace(/: (\d+\.?\d*)/g, ': <span class="json-num">$1</span>')
+    .replace(/: (true|false)/g, ': <span class="json-bool">$1</span>');
+  $('sd-json').innerHTML = json;
+}
+
+// ── Health checks ──
+async function checkHealth(service) {
+  const data = await api(service, '/health');
+  const ok = data && data.status === 'healthy';
+  state.health[service] = ok;
+
+  // Update dots
+  const dot = $(`dot-${service}`);
+  if(dot) { dot.className = `svc-dot ${ok ? 'ok' : 'err'}`; }
+
+  // Update health cards
+  const hcs = $(`hcs-${service}`);
+  if(hcs) {
+    hcs.className = `hc-status ${ok ? 'ok' : 'err'}`;
+    hcs.textContent = ok ? '● healthy' : '✗ offline';
+  }
+  return ok;
+}
+
+async function checkAllHealth() {
+  const results = await Promise.all(
+    Object.keys(CONFIG.services).map(s => checkHealth(s))
+  );
+  const healthy = results.filter(Boolean).length;
+  $('b-healthy').textContent = `${healthy}/5`;
+  updatePortForwardStatus();
+
+  // Update banner uptime from cart
+  const cartData = await api('cart', '/health');
+  if(cartData) $('b-uptime').textContent = Math.floor(cartData.uptime || 0) + 's';
+
+  // Update KPIs from stats endpoints
+  const [cartStats, prodData, authStats, notifStats] = await Promise.all([
+    api('cart', '/stats'),
+    api('product', '/stats'),
+    api('auth', '/stats'),
+    api('notification', '/stats'),
+  ]);
+
+  if(cartStats) { $('k-carts').textContent = cartStats.activeCarts ?? '–'; $('nav-cart-count').textContent = cartStats.totalItems ?? 0; }
+  if(prodData) $('k-products').textContent = prodData.totalProducts ?? '–';
+  if(authStats) $('k-sessions').textContent = authStats.activeSessions ?? '–';
+  if(notifStats) $('k-notifs').textContent = notifStats.totalSent ?? '–';
+
+  $('last-refresh').textContent = `Updated ${new Date().toLocaleTimeString()}`;
+  if(state.selectedService) loadServiceDetail(state.selectedService);
+}
+
+// ── Port-forward status ──
+function updatePortForwardStatus() {
+  const lines = Object.entries(CONFIG.services).map(([name, cfg]) => {
+    const ok = state.health[name];
+    const icon = ok ? '✓' : '✗';
+    const color = ok ? 'var(--teal)' : 'var(--rose)';
+    return `<span style="color:${color}">${icon}</span> kubectl port-forward svc/${name}-service ${cfg.port}:80 -n ecommerce`;
+  }).join('<br>');
+  $('pf-status').innerHTML = lines;
+}
+
+// ── Products ──
+async function fetchProducts() {
+  const data = await api('product', '/products');
+  if(!data) { $('products-tbody').innerHTML = `<tr><td colspan="5" class="empty">product service unreachable — run port-forward on :3001</td></tr>`; return; }
+  $('prod-sub').textContent = `${data.total} products · ${data.categories?.join(', ')}`;
+  $('products-tbody').innerHTML = data.products.map(p => `
+    <tr>
+      <td><div class="prod-cell"><span class="prod-emoji">${p.emoji}</span><div><div class="prod-name">${p.name}</div><div class="prod-sku">${p.sku}</div></div></div></td>
+      <td><span style="font-size:12px;color:var(--muted)">${p.category}</span></td>
+      <td><span class="price">${fmt(p.price)}</span></td>
+      <td><span class="stock-pill ${p.stock===0?'stock-out':p.stock<5?'stock-low':'stock-ok'}">${p.stock===0?'Out of Stock':p.stock<5?`Low (${p.stock})`:`${p.stock} units`}</span></td>
+      <td><span class="rating">★ ${p.rating} <span style="color:var(--muted)">(${p.reviews})</span></span></td>
+    </tr>
+  `).join('');
+
+  const stats = await api('product', '/stats');
+  if(stats) {
+    $('product-kpis').innerHTML = `
+      <div class="kpi teal"><div class="kpi-lbl">Total Products</div><div class="kpi-val">${stats.totalProducts}</div></div>
+      <div class="kpi sky"><div class="kpi-lbl">In Stock</div><div class="kpi-val">${stats.inStock}</div></div>
+      <div class="kpi rose"><div class="kpi-lbl">Out of Stock</div><div class="kpi-val">${stats.outOfStock}</div></div>
+      <div class="kpi amber"><div class="kpi-lbl">Avg Price</div><div class="kpi-val">${fmt(stats.avgPrice)}</div></div>
+    `;
+  }
+}
+
+// ── Cart ──
+async function fetchCart() {
+  const userId = $('cart-user').value;
+  const data = await api('cart', '/items', { headers: { 'x-user-id': userId } });
+  if(!data) { $('cart-items').innerHTML = `<div class="empty">cart service unreachable on :3000</div>`; return; }
+  state.cart = data;
+  renderCart(data);
+
+  const stats = await api('cart', '/stats');
+  if(stats) {
+    $('cart-stats-body').innerHTML = `
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <div class="detail-metric"><div class="detail-metric-lbl">Active Carts</div><div class="detail-metric-val">${stats.activeCarts}</div></div>
+        <div class="detail-metric"><div class="detail-metric-lbl">Total Items</div><div class="detail-metric-val">${stats.totalItems}</div></div>
+        <div class="detail-metric"><div class="detail-metric-lbl">Total Value</div><div class="detail-metric-val" style="font-size:14px">${fmt(stats.totalValue)}</div></div>
+      </div>
+    `;
+  }
+}
+
+function renderCart(data) {
+  if(!data.items || data.items.length === 0) {
+    $('cart-items').innerHTML = `<div class="empty">Cart is empty — add items above</div>`;
+    $('cart-total').textContent = '₹0';
+    return;
+  }
+  $('cart-items').innerHTML = data.items.map(item => `
+    <div class="cart-item">
+      <span class="ci-emoji">${item.emoji || '📦'}</span>
+      <div class="ci-info"><div class="ci-name">${item.name}</div><div class="ci-sku">${item.sku}</div></div>
+      <div class="qty-ctrl">
+        <button class="qty-btn" onclick="changeQty('${item.productId}',-1)">−</button>
+        <span class="qty-num">${item.quantity}</span>
+        <button class="qty-btn" onclick="changeQty('${item.productId}',1)">+</button>
+      </div>
+      <span class="ci-price">${fmt(item.price * item.quantity)}</span>
+      <button class="ci-remove" onclick="removeFromCart('${item.productId}')">×</button>
+    </div>
+  `).join('');
+  $('cart-total').textContent = data.totalFormatted || fmt(data.total || 0);
+  $('nav-cart-count').textContent = data.itemCount || 0;
+}
+
+async function addToCart() {
+  const userId = $('cart-user').value;
+  const productId = $('add-product-select').value;
+  const data = await api('cart', '/add', {
+    method: 'POST',
+    headers: { 'x-user-id': userId },
+    body: JSON.stringify({ productId, quantity: 1 }),
+  });
+  if(data && !data.error) { showToast('Item added to cart', 'ok'); fetchCart(); }
+  else showToast(data?.error || 'Error adding item', 'err');
+}
+
+async function removeFromCart(productId) {
+  const userId = $('cart-user').value;
+  await api('cart', '/remove', { method: 'DELETE', headers: { 'x-user-id': userId }, body: JSON.stringify({ productId }) });
+  fetchCart();
+}
+
+function changeQty(productId, delta) {
+  // In a real app, this would call PATCH /cart/item
+  // For now, re-fetch cart
+  fetchCart();
+}
+
+async function checkout() {
+  const userId = $('cart-user').value;
+  const total = state.cart.total || 0;
+  if(total === 0) { showToast('Cart is empty', 'info'); return; }
+
+  const payData = await api('payment', '/process', {
+    method: 'POST',
+    headers: { 'x-user-id': userId },
+    body: JSON.stringify({ amount: total, method: 'upi', orderId: `ORD-${Date.now()}` }),
+  });
+  if(payData && payData.transaction?.status === 'success') {
+    showToast(`Payment ₹${total.toLocaleString('en-IN')} successful! 🎉`, 'ok', 4000);
+    await api('notification', '/send', {
+      method: 'POST',
+      headers: { 'x-user-id': userId },
+      body: JSON.stringify({ type: 'payment_success', channel: 'email', userId, data: { amount: total, txnId: payData.transaction.id } }),
+    });
+    await api('cart', '/clear', { method: 'DELETE', headers: { 'x-user-id': userId } });
+    fetchCart();
+  } else {
+    showToast(payData?.message || 'Payment failed', 'err');
+  }
+}
+
+// ── Payment ──
+async function fetchPaymentData() {
+  const data = await api('payment', '/transactions');
+  if(!data) { $('txn-list').innerHTML = `<div class="empty">payment service unreachable on :3002</div>`; return; }
+
+  $('txn-list').innerHTML = data.transactions.length === 0
+    ? `<div class="empty">No transactions yet. Try checkout in the Cart tab.</div>`
+    : data.transactions.map(t => `
+      <div class="txn-item">
+        <div class="txn-icon" style="background:${t.status==='success'?'var(--teal-l)':'var(--rose-l)'}">${t.status==='success'?'✓':'✗'}</div>
+        <div class="txn-body"><div class="txn-id">${t.id}</div><div class="txn-meta">${t.method?.toUpperCase()} · ${ago(t.timestamp)}</div></div>
+        <div class="txn-amount ${t.status==='success'?'txn-ok':'txn-fail'}">${fmt(t.amount)}</div>
+      </div>
+    `).join('');
+
+  const stats = await api('payment', '/stats');
+  if(stats) {
+    $('payment-stats').innerHTML = `
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <div class="detail-metric"><div class="detail-metric-lbl">Success Rate</div><div class="detail-metric-val" style="color:var(--teal)">${stats.successRate}</div></div>
+        <div class="detail-metric"><div class="detail-metric-lbl">Total Revenue</div><div class="detail-metric-val" style="font-size:14px">${fmt(stats.totalRevenue)}</div></div>
+        <div class="detail-metric"><div class="detail-metric-lbl">Transactions</div><div class="detail-metric-val">${stats.totalTransactions}</div></div>
+      </div>
+    `;
+  }
+}
+
+async function processTestPayment() {
+  const data = await api('payment', '/process', {
+    method: 'POST',
+    body: JSON.stringify({ amount: Math.floor(Math.random() * 50000) + 500, method: 'card', orderId: `TEST-${Date.now()}` }),
+  });
+  showToast(data?.message || 'Error', data?.transaction?.status === 'success' ? 'ok' : 'err');
+  fetchPaymentData();
+}
+
+// ── Auth ──
+async function fetchAuthData() {
+  const data = await api('auth', '/users');
+  if(!data) { $('auth-users').innerHTML = `<div class="empty">auth service unreachable on :3003</div>`; return; }
+  const colors = ['#0f766e','#0369a1','#6d28d9','#b45309','#be123c'];
+  $('auth-users').innerHTML = data.users.map((u, i) => `
+    <div class="user-card">
+      <div class="user-avatar" style="background:${colors[i%colors.length]}20;color:${colors[i%colors.length]}">${u.name.split(' ').map(n=>n[0]).join('')}</div>
+      <div><div class="user-name">${u.name}</div><div class="user-email">${u.email}</div></div>
+      <span class="role-badge ${u.role==='admin'?'role-admin':'role-user'}">${u.role}</span>
+    </div>
+  `).join('');
+
+  const stats = await api('auth', '/stats');
+  if(stats) {
+    $('auth-stats').innerHTML = `
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <div class="detail-metric"><div class="detail-metric-lbl">Total Users</div><div class="detail-metric-val">${stats.totalUsers}</div></div>
+        <div class="detail-metric"><div class="detail-metric-lbl">Active Sessions</div><div class="detail-metric-val">${stats.activeSessions}</div></div>
+        <div class="detail-metric"><div class="detail-metric-lbl">Admins</div><div class="detail-metric-val">${stats.admins}</div></div>
+      </div>
+    `;
+  }
+}
+
+async function testLogin() {
+  const email = $('login-email').value;
+  const data = await api('auth', '/login', { method: 'POST', body: JSON.stringify({ email, password: 'test' }) });
+  if(data?.token) {
+    $('login-result').innerHTML = `<span style="color:var(--teal)">✓ Logged in as ${data.user.name} (${data.user.role})<br>Token: ${data.token.substring(0,20)}...</span>`;
+    showToast(`Logged in as ${data.user.name}`, 'ok');
+  } else {
+    $('login-result').innerHTML = `<span style="color:var(--rose)">✗ Login failed: ${data?.error || 'unknown error'}</span>`;
+  }
+}
+
+// ── Notifications ──
+async function fetchNotifData() {
+  const data = await api('notification', '/notifications');
+  if(!data) { $('notif-list').innerHTML = `<div class="empty">notification service unreachable on :3004</div>`; return; }
+  const iconMap = { order_placed:'🛍', payment_success:'💸', order_shipped:'🚚', welcome:'🎉' };
+  const bgMap = { order_placed:'var(--teal-l)', payment_success:'var(--sky-l)', order_shipped:'var(--amber-l)', welcome:'var(--purple-l)' };
+  $('notif-list').innerHTML = data.notifications.length === 0
+    ? `<div class="empty">No notifications. Complete a checkout to trigger one.</div>`
+    : data.notifications.map(n => `
+      <div class="notif-item">
+        <div class="notif-icon" style="background:${bgMap[n.type]||'var(--bg2)'}">${iconMap[n.type]||'📧'}</div>
+        <div class="notif-body"><h5>${n.subject}</h5><p>${n.body}</p></div>
+        <div class="notif-time">${ago(n.sentAt)}</div>
+      </div>
+    `).join('');
+
+  const stats = await api('notification', '/stats');
+  if(stats) {
+    $('notif-stats').innerHTML = `
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <div class="detail-metric"><div class="detail-metric-lbl">Total Sent</div><div class="detail-metric-val">${stats.totalSent}</div></div>
+        <div class="detail-metric"><div class="detail-metric-lbl">Email</div><div class="detail-metric-val">${stats.byChannel.email}</div></div>
+        <div class="detail-metric"><div class="detail-metric-lbl">Order Placed</div><div class="detail-metric-val">${stats.byType.order_placed}</div></div>
+      </div>
+    `;
+  }
+}
+
+async function sendTestNotif() {
+  const data = await api('notification', '/send', {
+    method: 'POST',
+    body: JSON.stringify({ type: 'welcome', channel: 'email', userId: 'usr_001', data: { name: 'Test User' } }),
+  });
+  showToast(data?.message || 'Error', 'ok');
+  fetchNotifData();
+}
+
+// ── Spark chart ──
+function buildSparkChart() {
+  const vals = Array.from({length:24}, () => Math.floor(20 + Math.random() * 80));
+  vals[vals.length-1] = 95;
+  $('spark').innerHTML = vals.map((v,i) =>
+    `<div class="spark-bar${i===vals.length-1?' peak':''}" style="height:${v}%" title="${v} req/s"></div>`
+  ).join('');
+}
+
+// ── Port config modal ──
+function showPortConfig() {
+  const container = $('port-inputs');
+  container.innerHTML = Object.entries(CONFIG.services).map(([name, cfg]) => `
+    <div style="display:flex;align-items:center;gap:10px">
+      <span style="font-size:16px">${cfg.emoji}</span>
+      <label style="font-family:var(--mono);font-size:11px;flex:1;color:var(--muted)">${name}</label>
+      <input id="port-${name}" value="${cfg.port}" type="number" style="width:80px;padding:6px 8px;border:1px solid var(--border);border-radius:var(--r);font-family:var(--mono);font-size:12px;background:var(--bg)">
+    </div>
+  `).join('');
+  $('config-modal').style.display = 'flex';
+}
+
+function closeConfig() { $('config-modal').style.display = 'none'; }
+
+function saveConfig() {
+  Object.keys(CONFIG.services).forEach(name => {
+    const val = parseInt($(`port-${name}`)?.value);
+    if(val) {
+      CONFIG.services[name].port = val;
+      const hcp = $(`hcp-${name}`);
+      if(hcp) hcp.textContent = val;
+    }
+  });
+  closeConfig();
+  showToast('Ports saved. Refreshing...', 'info');
+  refreshAll();
+}
+
+// ── Refresh ──
+async function refreshAll() {
+  const btn = $('refresh-btn');
+  btn.innerHTML = '<span class="refresh-spinner">↻</span> Refreshing';
+  btn.disabled = true;
+  await checkAllHealth();
+  btn.innerHTML = '↻ Refresh';
+  btn.disabled = false;
+}
+
+// ── Init ──
+buildSparkChart();
+checkAllHealth();
+setInterval(checkAllHealth, 30000); // auto-refresh every 30s
+</script>
+</body>
+</html>

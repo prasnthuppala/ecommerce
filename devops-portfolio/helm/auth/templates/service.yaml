@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: auth-service
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: auth
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    app: auth
+  ports:
+    - port: {{ .Values.service.port }}
+      targetPort: {{ .Values.service.targetPort }}
