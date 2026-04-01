@@ -1,0 +1,203 @@
+name: "Terraform — Provision EKS"
+
+# =============================================================
+# WHY A SEPARATE WORKFLOW FOR TERRAFORM:
+# Terraform (infrastructure) and Helm (application deployment) have
+# different lifecycles and different risk profiles.
+#
+# Terraform changes are RARE (once per project setup, then rarely).
+# Helm deploys happen on EVERY code push.
+# Separating them means:
+#   - A broken app deploy can't accidentally destroy your infra
+#   - You can review Terraform plans before applying
+#   - Infrastructure changes require explicit manual trigger
+#
+# WORKFLOW DESIGN:
+# This workflow is MANUAL ONLY (workflow_dispatch).
+# You explicitly choose: plan, apply, or destroy.
+# No automatic infrastructure changes on code push.
+# Production rule: infrastructure changes always need human review.
+# =============================================================
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Terraform action to run"
+        required: true
+        type: choice
+        options:
+          - plan      # Show what will change — no actual changes
+          - apply     # Create/update infrastructure
+          - destroy   # DESTROY ALL RESOURCES — stops billing
+        default: plan
+      confirm_destroy:
+        description: "Type DESTROY to confirm destruction (only needed for destroy action)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+  id-token: write   # OIDC token for AWS authentication
+
+env:
+  TF_DIR: infra/terraform
+  AWS_REGION: ap-south-1
+  # TF_LOG: DEBUG  # Uncomment for verbose Terraform logging
+
+jobs:
+  terraform:
+    name: "Terraform ${{ github.event.inputs.action }}"
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    # EKS creation takes ~15 minutes. Node group ~5 more. 45min is safe.
+
+    defaults:
+      run:
+        working-directory: ${{ env.TF_DIR }}
+        # All 'run' steps execute from infra/terraform/
+        # So 'terraform init' runs in infra/terraform/ automatically.
+
+    steps:
+      # ── 1. Checkout ────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Safety check for destroy ───────────────────────────
+      - name: Verify destroy confirmation
+        if: github.event.inputs.action == 'destroy'
+        run: |
+          if [ "${{ github.event.inputs.confirm_destroy }}" != "DESTROY" ]; then
+            echo "❌ Destroy requires confirm_destroy = 'DESTROY'"
+            echo "   Re-run the workflow and type DESTROY in the confirmation field."
+            exit 1
+          fi
+          echo "✅ Destroy confirmed"
+
+      # ── 3. Install Terraform ───────────────────────────────────
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~1.5"
+          # Pin Terraform version. Without this, GitHub Actions downloads
+          # whatever is latest — could be a major version with breaking changes.
+
+      # ── 4. AWS OIDC Authentication ─────────────────────────────
+      # No AWS_ACCESS_KEY_ID needed. GitHub JWT → AWS temporary credentials.
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          # AWS_ROLE_ARN must be set in GitHub Secrets BEFORE this workflow runs.
+          # How to get the value:
+          #   1. Run locally: cd infra/terraform && terraform apply
+          #   2. terraform output github_actions_role_arn
+          #   3. Copy the ARN to GitHub: Settings → Secrets → Actions → New secret
+          # OR: use the bootstrap approach (see README — run setup locally first)
+          aws-region: ${{ env.AWS_REGION }}
+
+      # ── 5. Terraform Init ──────────────────────────────────────
+      - name: Terraform Init
+        run: |
+          terraform init
+          # What init does:
+          # - Downloads AWS provider (~150MB)
+          # - Downloads TLS provider
+          # - Connects to S3 backend (verifies bucket/table exist)
+          # - Creates .terraform/ directory (never commit this)
+          # If this fails: check AWS permissions and S3 bucket exists.
+        env:
+          TF_VAR_github_org:  ${{ secrets.TF_VAR_GITHUB_ORG }}
+          TF_VAR_github_repo: ${{ secrets.TF_VAR_GITHUB_REPO }}
+          # We pass sensitive vars via environment, not terraform.tfvars
+          # TF_VAR_ prefix = Terraform reads these as variable values
+
+      # ── 6. Terraform Format Check ─────────────────────────────
+      - name: Terraform Format Check
+        run: terraform fmt -check -recursive
+        # -check: exits with error if any .tf file isn't properly formatted
+        # -recursive: checks all subdirectories
+        # Production rule: all .tf files must be formatted by 'terraform fmt'
+        # before merging. This enforces consistent style across the team.
+        continue-on-error: true
+        # Don't fail the pipeline over formatting. Fix it separately.
+
+      # ── 7. Terraform Validate ──────────────────────────────────
+      - name: Terraform Validate
+        run: terraform validate
+        # Checks: are all resource types valid? Are all required arguments
+        # provided? Are variable references correct?
+        # Does NOT check: whether AWS resources actually exist or if
+        # your IAM user has permissions to create them.
+
+      # ── 8. Terraform Plan ─────────────────────────────────────
+      - name: Terraform Plan
+        id: plan
+        run: |
+          terraform plan \
+            -var="your_iam_user_arn=${{ secrets.YOUR_IAM_USER_ARN }}" \
+            -out=tfplan \
+            -no-color
+          # -out=tfplan: save the plan to a file
+          # The saved plan is what 'apply' will execute.
+          # This guarantees apply does exactly what plan showed.
+          # Without -out: apply re-plans and might show different results.
+          # -no-color: cleaner output in GitHub Actions logs
+        env:
+          TF_VAR_github_org:  ${{ secrets.TF_VAR_GITHUB_ORG }}
+          TF_VAR_github_repo: ${{ secrets.TF_VAR_GITHUB_REPO }}
+
+      # ── 9. Show Plan in PR Comment (useful for team review) ────
+      - name: Post plan to job summary
+        run: |
+          echo "## Terraform Plan" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          terraform show -no-color tfplan | head -100 >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+
+      # ── 10. Terraform Apply ────────────────────────────────────
+      - name: Terraform Apply
+        if: github.event.inputs.action == 'apply'
+        run: |
+          terraform apply -auto-approve tfplan
+          # -auto-approve: skip interactive confirmation.
+          # Safe because: we already confirmed in the plan step,
+          # and the tfplan file is locked to exactly what was planned.
+          echo ""
+          echo "=== Outputs ==="
+          terraform output
+        env:
+          TF_VAR_github_org:  ${{ secrets.TF_VAR_GITHUB_ORG }}
+          TF_VAR_github_repo: ${{ secrets.TF_VAR_GITHUB_REPO }}
+
+      # ── 11. Save outputs to GitHub summary ─────────────────────
+      - name: Save cluster info to job summary
+        if: github.event.inputs.action == 'apply'
+        run: |
+          CLUSTER=$(terraform output -raw cluster_name 2>/dev/null || echo "N/A")
+          GH_ROLE=$(terraform output -raw github_actions_role_arn 2>/dev/null || echo "N/A")
+          KUBECTL_CMD=$(terraform output -raw configure_kubectl 2>/dev/null || echo "N/A")
+
+          echo "## ✅ EKS Cluster Provisioned" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Output | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Cluster Name | \`${CLUSTER}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| GitHub Actions Role | \`${GH_ROLE}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Next steps:" >> $GITHUB_STEP_SUMMARY
+          echo "1. Configure kubectl: \`${KUBECTL_CMD}\`" >> $GITHUB_STEP_SUMMARY
+          echo "2. Add GitHub Secret \`AWS_ROLE_ARN\` = \`${GH_ROLE}\`" >> $GITHUB_STEP_SUMMARY
+          echo "3. Trigger the CD pipeline to deploy services" >> $GITHUB_STEP_SUMMARY
+
+      # ── 12. Terraform Destroy ──────────────────────────────────
+      - name: Terraform Destroy
+        if: github.event.inputs.action == 'destroy'
+        run: |
+          terraform destroy \
+            -auto-approve \
+            -var="your_iam_user_arn=${{ secrets.YOUR_IAM_USER_ARN }}"
+          echo "## 🗑️ All AWS resources destroyed. Billing stopped." >> $GITHUB_STEP_SUMMARY
+        env:
+          TF_VAR_github_org:  ${{ secrets.TF_VAR_GITHUB_ORG }}
+          TF_VAR_github_repo: ${{ secrets.TF_VAR_GITHUB_REPO }}

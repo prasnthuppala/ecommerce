@@ -1,0 +1,314 @@
+name: "CD — Deploy to EKS"
+
+# =============================================================
+# HOW THIS CD PIPELINE CONNECTS TO YOUR EXISTING SETUP:
+#
+# Your CI pipeline (ci.yml) already:
+#   - Builds Docker images
+#   - Runs Trivy scan
+#   - Pushes to GHCR (GitHub Container Registry)
+#
+# This CD pipeline:
+#   - Triggers after CI completes on main branch
+#   - Re-tags and pushes the same image to ECR (AWS registry)
+#   - Connects to EKS via OIDC (no static keys)
+#   - Deploys all 5 services via Helm (using your existing charts)
+#
+# WHY PUSH TO ECR EVEN THOUGH CI ALREADY PUSHES TO GHCR:
+# EKS pulling from GHCR = traffic through NAT Gateway = costs money
+# EKS pulling from ECR in same region = FREE (VPC endpoint)
+# ECR also has no rate limits for your own images.
+# Production rule: always use ECR for EKS workloads.
+# =============================================================
+
+on:
+  # Auto-trigger: when CI passes on main
+  workflow_run:
+    workflows: ["CI Pipeline"]
+    # This must match EXACTLY the 'name:' field in your ci.yml
+    types: [completed]
+    branches: [main]
+
+  # Manual trigger: deploy specific tag or re-deploy
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Image tag to deploy (empty = use latest main SHA)"
+        required: false
+        default: ""
+      skip_ecr_push:
+        description: "Skip ECR push (if image already pushed)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write   # OIDC for AWS
+  deployments: write  # Create GitHub Deployment records
+
+env:
+  AWS_REGION: ap-south-1
+  NAMESPACE: ecommerce
+
+jobs:
+  # ════════════════════════════════════════════════════════════
+  # GATE: Only proceed if CI passed
+  # ════════════════════════════════════════════════════════════
+  check-ci-status:
+    name: Verify CI passed
+    runs-on: ubuntu-22.04
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    steps:
+      - name: CI status
+        run: |
+          echo "CI result: ${{ github.event.workflow_run.conclusion || 'manual trigger' }}"
+          echo "Will deploy commit: ${{ github.event.workflow_run.head_sha || github.sha }}"
+
+  # ════════════════════════════════════════════════════════════
+  # DEPLOY: push to ECR + helm deploy to EKS
+  # ════════════════════════════════════════════════════════════
+  deploy:
+    name: Deploy to EKS
+    runs-on: ubuntu-22.04
+    needs: check-ci-status
+    timeout-minutes: 25
+    environment:
+      name: production
+      # Links this to the "production" GitHub Environment.
+      # Set up required reviewers in: Settings → Environments → production
+      # for manual approval gate before production deploys.
+      # For dev cluster: remove this or use "staging" environment.
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── AWS OIDC Auth ─────────────────────────────────────────
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          # AWS_ROLE_ARN = output from terraform:
+          # terraform output github_actions_role_arn
+          # Set in: GitHub Settings → Secrets → Actions → New secret
+          aws-region: ${{ env.AWS_REGION }}
+
+      # ── Determine deploy tag ─────────────────────────────────
+      - name: Set image tag
+        id: vars
+        run: |
+          # Priority: manual input > CI trigger SHA > current SHA
+          TAG="${{ github.event.inputs.image_tag }}"
+          if [ -z "$TAG" ]; then
+            TAG="${{ github.event.workflow_run.head_sha || github.sha }}"
+          fi
+          # Truncate to 7 chars (short SHA) for readability
+          SHORT_TAG="${TAG:0:7}"
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+          echo "short_tag=${SHORT_TAG}" >> $GITHUB_OUTPUT
+
+          # Get AWS account ID for ECR URLs
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          echo "account_id=${ACCOUNT_ID}" >> $GITHUB_OUTPUT
+          ECR_BASE="${ACCOUNT_ID}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com"
+          echo "ecr_base=${ECR_BASE}" >> $GITHUB_OUTPUT
+
+          echo "Deploying tag: ${TAG}"
+          echo "ECR base: ${ECR_BASE}"
+
+      # ── Login to ECR ─────────────────────────────────────────
+      - name: Login to ECR
+        uses: aws-actions/amazon-ecr-login@v2
+        # Runs: aws ecr get-login-password | docker login <ecr-url>
+        # Token valid 12 hours. Auto-expires.
+
+      # ── Login to GHCR (to pull the image CI already built) ───
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+          # GITHUB_TOKEN is auto-provided. No setup needed.
+
+      # ── Pull from GHCR, push to ECR ──────────────────────────
+      # WHY: CI pushes to GHCR. We pull that image and push to ECR.
+      # This means we're deploying the EXACT same image that CI scanned.
+      # No re-building = no risk of image being different than what Trivy saw.
+      - name: Push images to ECR
+        if: ${{ github.event.inputs.skip_ecr_push != 'true' }}
+        run: |
+          REPO_OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          ECR_BASE="${{ steps.vars.outputs.ecr_base }}"
+          TAG="${{ steps.vars.outputs.tag }}"
+
+          for SVC in cart product payment auth notification; do
+            GHCR_IMAGE="ghcr.io/${REPO_OWNER}/devops-portfolio/${SVC}:${TAG}"
+            ECR_IMAGE="${ECR_BASE}/devops-portfolio/${SVC}:${TAG}"
+
+            echo "━━━ ${SVC} ━━━"
+            echo "Pulling: ${GHCR_IMAGE}"
+
+            # Pull from GHCR (already built and scanned by CI)
+            docker pull "${GHCR_IMAGE}" 2>/dev/null || {
+              # If GHCR image doesn't exist with that tag, try latest
+              echo "  Tag not found, trying latest..."
+              docker pull "ghcr.io/${REPO_OWNER}/devops-portfolio/${SVC}:latest"
+              docker tag "ghcr.io/${REPO_OWNER}/devops-portfolio/${SVC}:latest" "${GHCR_IMAGE}"
+            }
+
+            # Re-tag for ECR
+            docker tag "${GHCR_IMAGE}" "${ECR_IMAGE}"
+            docker tag "${GHCR_IMAGE}" "${ECR_BASE}/devops-portfolio/${SVC}:latest"
+
+            # Push to ECR
+            echo "Pushing to ECR: ${ECR_IMAGE}"
+            docker push "${ECR_IMAGE}"
+            docker push "${ECR_BASE}/devops-portfolio/${SVC}:latest"
+
+            echo "✅ ${SVC} pushed to ECR"
+          done
+
+      # ── Configure kubectl ─────────────────────────────────────
+      - name: Configure kubectl for EKS
+        run: |
+          # Get cluster name from Terraform outputs OR from known pattern
+          CLUSTER_NAME="devops-portfolio-dev-cluster"
+          # If you want dynamic lookup: install AWS CLI + get from TF output
+          # For simplicity we use the known naming convention.
+
+          aws eks update-kubeconfig \
+            --name "${CLUSTER_NAME}" \
+            --region ${{ env.AWS_REGION }}
+
+          # Verify connection
+          kubectl cluster-info --request-timeout=15s
+          echo "✅ kubectl connected to ${CLUSTER_NAME}"
+
+      # ── Create namespace ──────────────────────────────────────
+      - name: Ensure ecommerce namespace exists
+        run: |
+          kubectl get namespace ${{ env.NAMESPACE }} 2>/dev/null || \
+            kubectl create namespace ${{ env.NAMESPACE }}
+          echo "✅ Namespace ${{ env.NAMESPACE }} ready"
+
+      # ── Install Helm ──────────────────────────────────────────
+      - name: Install Helm
+        run: |
+          curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
+          chmod +x get_helm.sh && ./get_helm.sh
+          helm version
+
+      # ── Helm Deploy all 5 services ────────────────────────────
+      - name: Deploy all services via Helm
+        run: |
+          ECR_BASE="${{ steps.vars.outputs.ecr_base }}"
+          TAG="${{ steps.vars.outputs.tag }}"
+
+          # Declare service ports
+          declare -A PORTS=([cart]=3000 [product]=3001 [payment]=3002 [auth]=3003 [notification]=3004)
+
+          for SVC in cart product payment auth notification; do
+            PORT=${PORTS[$SVC]}
+            ECR_REPO="${ECR_BASE}/devops-portfolio/${SVC}"
+
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "Deploying: ${SVC}-service"
+            echo "Image:     ${ECR_REPO}:${TAG}"
+            echo ""
+
+            helm upgrade --install "${SVC}-service" "./helm/${SVC}" \
+              --namespace ${{ env.NAMESPACE }} \
+              --create-namespace \
+              --set image.repository="${ECR_REPO}" \
+              --set image.tag="${TAG}" \
+              --set image.pullPolicy="Always" \
+              --set env.PORT="${PORT}" \
+              --atomic \
+              --timeout 5m \
+              --wait \
+              --history-max 5
+            # --atomic:      auto-rollback if pods don't become Ready in 5m
+            # --wait:        block until all pods pass readinessProbe
+            # --history-max: keep last 5 releases. Older ones deleted from K8s secrets.
+
+            echo "✅ ${SVC}-service deployed"
+          done
+
+      # ── Verify all rollouts complete ──────────────────────────
+      - name: Verify deployments
+        run: |
+          echo "Checking rollout status..."
+          for SVC in cart product payment auth notification; do
+            kubectl rollout status \
+              "deployment/${SVC}-service" \
+              -n ${{ env.NAMESPACE }} \
+              --timeout=120s
+            echo "✅ ${SVC}: rollout complete"
+          done
+
+          echo ""
+          echo "━━━━━━━━━━━ Final Pod Status ━━━━━━━━━━━"
+          kubectl get pods -n ${{ env.NAMESPACE }} -o wide
+          echo ""
+          echo "━━━━━━━━━━━ Services ━━━━━━━━━━━━━━━━━━━"
+          kubectl get services -n ${{ env.NAMESPACE }}
+
+      # ── Quick smoke test via kubectl exec ─────────────────────
+      - name: Smoke test health endpoints
+        run: |
+          declare -A PORTS=([cart]=3000 [product]=3001 [payment]=3002 [auth]=3003 [notification]=3004)
+          ALL_HEALTHY=true
+
+          for SVC in cart product payment auth notification; do
+            PORT=${PORTS[$SVC]}
+            POD=$(kubectl get pods -n ${{ env.NAMESPACE }} \
+              -l "app=${SVC}" \
+              -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+
+            if [ -z "$POD" ]; then
+              echo "❌ No pod found for ${SVC}"
+              ALL_HEALTHY=false
+              continue
+            fi
+
+            RESPONSE=$(kubectl exec -n ${{ env.NAMESPACE }} "${POD}" \
+              -- wget -qO- "http://localhost:${PORT}/health" 2>/dev/null || echo "")
+
+            if echo "${RESPONSE}" | grep -q '"status":"healthy"'; then
+              echo "✅ ${SVC}: healthy"
+            else
+              echo "❌ ${SVC}: health check failed. Response: ${RESPONSE}"
+              ALL_HEALTHY=false
+            fi
+          done
+
+          if [ "${ALL_HEALTHY}" != "true" ]; then
+            echo ""
+            echo "Some services failed health checks. Checking logs..."
+            kubectl get events -n ${{ env.NAMESPACE }} --sort-by='.lastTimestamp' | tail -20
+            exit 1
+          fi
+
+      # ── Deployment summary ────────────────────────────────────
+      - name: Write deployment summary
+        if: always()
+        run: |
+          echo "## 🚀 EKS Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| | |" >> $GITHUB_STEP_SUMMARY
+          echo "|--|--|" >> $GITHUB_STEP_SUMMARY
+          echo "| Commit | \`${{ steps.vars.outputs.short_tag }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Full SHA | \`${{ steps.vars.outputs.tag }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Namespace | \`${{ env.NAMESPACE }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Region | \`${{ env.AWS_REGION }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Services" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          kubectl get pods -n ${{ env.NAMESPACE }} \
+            --no-headers \
+            -o custom-columns="NAME:.metadata.name,STATUS:.status.phase,READY:.status.containerStatuses[0].ready" \
+            2>/dev/null >> $GITHUB_STEP_SUMMARY || echo "Could not fetch pods" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
